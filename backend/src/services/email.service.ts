@@ -12,30 +12,25 @@
  */
 import { env } from '../config/env';
 import { logger, logEvents } from '../utils/logger';
-import {
-  getMailAccessToken,
-  isMailAuthorized,
-} from './microsoftAuth.service';
+import { getMailAccessToken, isConnected } from './microsoftAuth.service';
 
 const GRAPH_SENDMAIL_URL = 'https://graph.microsoft.com/v1.0/me/sendMail';
 
-/** Quick startup check: is the sending mailbox authorized? */
+/** Quick startup check: is a Microsoft account connected and able to send? */
 export async function verifyEmailReady(): Promise<boolean> {
-  if (!isMailAuthorized()) {
+  if (!(await isConnected())) {
     logger.warn(
-      'Sender mailbox NOT authorized yet. Visit ' +
-        `${env.backendUrl}/auth/microsoft/mail-setup once while signed in as the sender outlook.com account.`
+      'No Microsoft account connected yet. Sign in via "Continue with Microsoft" ' +
+        `(or ${env.backendUrl}/auth/microsoft) to connect a sending account.`
     );
     return false;
   }
   try {
     await getMailAccessToken();
-    logger.info('Outlook (Microsoft Graph) mail transport ready', {
-      sender: env.microsoft.mailSender || undefined,
-    });
+    logger.info('Outlook (Microsoft Graph) mail transport ready');
     return true;
   } catch (err) {
-    logger.error('Could not acquire a Graph token for the sender mailbox', {
+    logger.error('Could not acquire a Graph token for the connected account', {
       error: err instanceof Error ? err.message : String(err),
     });
     return false;

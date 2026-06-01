@@ -1,6 +1,7 @@
 import { Router } from 'express';
 import authRoutes from './auth.routes';
 import emailRoutes from './email.routes';
+import adminRoutes from './admin.routes';
 
 const router = Router();
 
@@ -14,5 +15,8 @@ router.use('/auth', authRoutes);
 
 // Machine-facing protected API:   /api/send-email
 router.use('/api', emailRoutes);
+
+// Admin connection management:    /admin/status, /admin/disconnect
+router.use('/admin', adminRoutes);
 
 export default router;

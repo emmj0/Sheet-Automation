@@ -78,6 +78,8 @@ export const env = {
   sheets: {
     spreadsheetId: required('GOOGLE_SHEET_ID'),
     sheetName: optional('GOOGLE_SHEET_NAME', 'Sheet1'),
+    /** Hidden tab used as the durable token store (no DB). */
+    systemSheetName: optional('SYSTEM_SHEET_NAME', '_system'),
     serviceAccountKeyPath: path.resolve(
       optional('SERVICE_ACCOUNT_KEY_PATH', './service-account.json')
     ),
@@ -85,6 +87,15 @@ export const env = {
   },
 
   apiKey: required('API_KEY'),
+
+  /** Key used to AES-encrypt the token store. Defaults to API_KEY so no new var is required. */
+  tokenEncKey: optional('TOKEN_ENC_KEY', '') || required('API_KEY'),
+
+  /** Admin gate credentials, validated server-side for /admin/* endpoints. */
+  admin: {
+    user: optional('ADMIN_USER', 'hng@admin'),
+    pass: optional('ADMIN_PASS', 'hng@4747'),
+  },
 
   mail: {
     /** Email subject. A specific line scores better with spam filters than "Welcome". */

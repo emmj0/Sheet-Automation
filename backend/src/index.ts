@@ -29,9 +29,9 @@ async function main(): Promise<void> {
 
   app.listen(env.port, () => {
     logger.info(`Backend listening on ${env.backendUrl} (port ${env.port})`);
-    logger.info(`Login start:     ${env.backendUrl}/auth/microsoft`);
+    logger.info(`Connect (login): ${env.backendUrl}/auth/microsoft`);
     logger.info(`Login callback:  ${env.microsoft.loginRedirectUri}`);
-    logger.info(`Mail setup (1x): ${env.backendUrl}/auth/microsoft/mail-setup`);
+    logger.info(`Admin status:    ${env.backendUrl}/admin/status`);
     logger.info(`Send email API:  ${env.backendUrl}/api/send-email`);
   });
 }

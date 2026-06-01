@@ -1,24 +1,19 @@
 /**
  * Microsoft authentication (Azure AD / Microsoft identity platform) via MSAL.
  *
- * Two independent flows live here:
+ * Merged "connection" model: signing in with Microsoft IS the connection.
+ *   - "Continue with Microsoft" authorizes the account with Mail.Send +
+ *     offline_access, so the same account both identifies the user AND can send
+ *     the welcome emails.
+ *   - The resulting token cache + connected account are persisted to a durable,
+ *     DB-less store (a hidden tab in the Google Sheet — see tokenStore.ts), so
+ *     the connection survives Render redeploys.
+ *   - Disconnect clears that stored token, after which sending is disabled until
+ *     someone connects again.
  *
- *  1) LOGIN  — end users click "Continue with Microsoft". We exchange the auth
- *     code for an ID token and read their email/name. No tokens are persisted;
- *     this client uses an in-memory cache.
- *
- *  2) MAIL   — a ONE-TIME admin consent that signs in the SENDER mailbox
- *     (the outlook.com account that sends emails) with `Mail.Send` +
- *     offline_access. MSAL caches the resulting refresh token to disk so the
- *     backend can later acquire access tokens silently and call
- *     Microsoft Graph /me/sendMail — even though Apps Script triggers the send
- *     long after the admin signed in.
- *
- * Why Graph + OAuth2 instead of SMTP? Microsoft disabled SMTP basic-auth and
- * app passwords for personal outlook.com/hotmail accounts, so OAuth2 is the
- * only supported path.
+ * Why Graph + OAuth2 (not SMTP)? Microsoft disabled SMTP basic-auth/app
+ * passwords for personal outlook.com accounts; OAuth2 is the supported path.
  */
-import fs from 'fs';
 import {
   ConfidentialClientApplication,
   Configuration,
@@ -27,77 +22,66 @@ import {
 } from '@azure/msal-node';
 import { env } from '../config/env';
 import { logger } from '../utils/logger';
+import * as tokenStore from './tokenStore';
 import type { UserProfile } from '../types';
 
-const LOGIN_SCOPES = ['User.Read'];
-const MAIL_SCOPES = ['Mail.Send'];
+/** Scopes requested when connecting. MSAL adds openid/profile/offline_access. */
+const CONNECT_SCOPES = ['User.Read', 'Mail.Send'];
 
-/* ── MSAL clients ─────────────────────────────────────────────────────── */
+/* ── MSAL client with a durable (sheet-backed) token cache ────────────── */
 
-const baseAuth: Configuration['auth'] = {
-  clientId: env.microsoft.clientId,
-  clientSecret: env.microsoft.clientSecret,
-  authority: env.microsoft.authority,
-};
-
-const baseSystem: Configuration['system'] = {
-  loggerOptions: {
-    loggerCallback: (level, message) => {
-      if (level === LogLevel.Error) logger.error(`[MSAL] ${message}`);
-    },
-    piiLoggingEnabled: false,
-    logLevel: LogLevel.Error,
-  },
-};
-
-/** Login client: in-memory cache (we never persist end-user tokens). */
-const loginClient = new ConfidentialClientApplication({
-  auth: baseAuth,
-  system: baseSystem,
-});
-
-/** Persist the sender's MSAL token cache to disk so refresh tokens survive restarts. */
-const mailCachePlugin: ICachePlugin = {
+const cachePlugin: ICachePlugin = {
   async beforeCacheAccess(ctx) {
-    if (fs.existsSync(env.microsoft.tokenCachePath)) {
-      ctx.tokenCache.deserialize(
-        fs.readFileSync(env.microsoft.tokenCachePath, 'utf-8')
-      );
-    }
+    const blob = await tokenStore.getCacheBlob();
+    if (blob) ctx.tokenCache.deserialize(blob);
   },
   async afterCacheAccess(ctx) {
     if (ctx.cacheHasChanged) {
-      fs.writeFileSync(
-        env.microsoft.tokenCachePath,
-        ctx.tokenCache.serialize(),
-        { mode: 0o600 }
-      );
+      await tokenStore.setCacheBlob(ctx.tokenCache.serialize());
     }
   },
 };
 
-const mailClient = new ConfidentialClientApplication({
-  auth: baseAuth,
-  system: baseSystem,
-  cache: { cachePlugin: mailCachePlugin },
-});
+const config: Configuration = {
+  auth: {
+    clientId: env.microsoft.clientId,
+    clientSecret: env.microsoft.clientSecret,
+    authority: env.microsoft.authority,
+  },
+  cache: { cachePlugin },
+  system: {
+    loggerOptions: {
+      loggerCallback: (level, message) => {
+        if (level === LogLevel.Error) logger.error(`[MSAL] ${message}`);
+      },
+      piiLoggingEnabled: false,
+      logLevel: LogLevel.Error,
+    },
+  },
+};
 
-/* ── 1) End-user login flow ───────────────────────────────────────────── */
+const msalClient = new ConfidentialClientApplication(config);
 
-/** URL of the Microsoft consent screen for end-user login. */
-export async function getLoginUrl(): Promise<string> {
-  return loginClient.getAuthCodeUrl({
-    scopes: LOGIN_SCOPES,
+/* ── Connect (login) ──────────────────────────────────────────────────── */
+
+/** URL of the Microsoft consent screen to connect an account. */
+export async function getConnectUrl(): Promise<string> {
+  return msalClient.getAuthCodeUrl({
+    scopes: CONNECT_SCOPES,
     redirectUri: env.microsoft.loginRedirectUri,
     prompt: 'select_account',
   });
 }
 
-/** Exchange the ?code= from the login callback for the user's profile. */
-export async function handleLoginCallback(code: string): Promise<UserProfile> {
-  const result = await loginClient.acquireTokenByCode({
+/**
+ * Handle the OAuth callback: exchange the code (which caches the refresh token
+ * via the durable plugin), record the connected account, and return the
+ * user's profile so the caller can store the email in the sheet.
+ */
+export async function handleConnectCallback(code: string): Promise<UserProfile> {
+  const result = await msalClient.acquireTokenByCode({
     code,
-    scopes: LOGIN_SCOPES,
+    scopes: CONNECT_SCOPES,
     redirectUri: env.microsoft.loginRedirectUri,
   });
 
@@ -108,93 +92,85 @@ export async function handleLoginCallback(code: string): Promise<UserProfile> {
     (claims.preferred_username as string) ||
     '';
 
-  if (!email) {
-    throw new Error('Microsoft did not return an email address for this account.');
+  if (!email || !result.account?.homeAccountId) {
+    throw new Error('Microsoft did not return an account/email for this sign-in.');
   }
 
+  await tokenStore.setAccount({
+    homeAccountId: result.account.homeAccountId,
+    username: email.toLowerCase(),
+    connectedAt: new Date().toISOString(),
+  });
+
+  logger.info('Microsoft account connected', { email: email.toLowerCase() });
+  return { email: email.toLowerCase(), name: result.account?.name || (claims.name as string) || undefined };
+}
+
+/* ── Status / disconnect ──────────────────────────────────────────────── */
+
+export interface ConnectionStatus {
+  connected: boolean;
+  email: string | null;
+  connectedAt: string | null;
+}
+
+/** Current connection status, read from the durable store. */
+export async function getConnectionStatus(): Promise<ConnectionStatus> {
+  const account = await tokenStore.getAccount();
   return {
-    email: email.toLowerCase(),
-    name: result.account?.name || (claims.name as string) || undefined,
+    connected: !!account,
+    email: account?.username ?? null,
+    connectedAt: account?.connectedAt ?? null,
   };
 }
 
-/* ── 2) Sender mailbox authorization (one-time) ───────────────────────── */
-
-/** URL the ADMIN visits once to authorize the sending mailbox. */
-export async function getMailAuthUrl(): Promise<string> {
-  return mailClient.getAuthCodeUrl({
-    scopes: MAIL_SCOPES, // MSAL adds offline_access automatically -> refresh token
-    redirectUri: env.microsoft.mailRedirectUri,
-    prompt: 'consent',
-    ...(env.microsoft.mailSender ? { loginHint: env.microsoft.mailSender } : {}),
-  });
+export async function isConnected(): Promise<boolean> {
+  return (await tokenStore.getAccount()) !== null;
 }
 
-/** Handle the admin's mail-consent callback and persist the account id. */
-export async function handleMailCallback(code: string): Promise<string> {
-  const result = await mailClient.acquireTokenByCode({
-    code,
-    scopes: MAIL_SCOPES,
-    redirectUri: env.microsoft.mailRedirectUri,
-  });
-
-  const homeAccountId = result.account?.homeAccountId;
-  if (!homeAccountId) {
-    throw new Error('Mail authorization did not return an account.');
+/** Remove the saved Microsoft connection (token + account). */
+export async function disconnect(): Promise<void> {
+  const account = await tokenStore.getAccount();
+  if (account) {
+    try {
+      const msalAccount = await msalClient
+        .getTokenCache()
+        .getAccountByHomeId(account.homeAccountId);
+      if (msalAccount) await msalClient.getTokenCache().removeAccount(msalAccount);
+    } catch (err) {
+      logger.warn('Could not remove MSAL account from cache during disconnect', {
+        error: err instanceof Error ? err.message : String(err),
+      });
+    }
   }
-
-  fs.writeFileSync(
-    env.microsoft.mailAccountPath,
-    JSON.stringify({
-      homeAccountId,
-      username: result.account?.username ?? '',
-      authorizedAt: new Date().toISOString(),
-    }),
-    { mode: 0o600 }
-  );
-
-  logger.info('Sender mailbox authorized', {
-    sender: result.account?.username,
-  });
-  return result.account?.username ?? '';
+  await tokenStore.clear();
 }
 
-/** Is the sender mailbox authorized yet? */
-export function isMailAuthorized(): boolean {
-  return fs.existsSync(env.microsoft.mailAccountPath);
-}
+/* ── Sending: acquire a Graph token for the connected account ─────────── */
 
-function readMailAccountId(): string {
-  if (!fs.existsSync(env.microsoft.mailAccountPath)) {
-    throw new Error(
-      'Sender mailbox is not authorized yet. Visit ' +
-        `${env.backendUrl}/auth/microsoft/mail-setup once while signed in as the sender.`
-    );
-  }
-  const data = JSON.parse(fs.readFileSync(env.microsoft.mailAccountPath, 'utf-8'));
-  return data.homeAccountId as string;
-}
-
-/**
- * Acquire a Graph access token for the sender mailbox using the cached
- * refresh token (MSAL renews/rotates it transparently).
- */
 export async function getMailAccessToken(): Promise<string> {
-  const homeAccountId = readMailAccountId();
-  const account = await mailClient.getTokenCache().getAccountByHomeId(homeAccountId);
+  const account = await tokenStore.getAccount();
   if (!account) {
     throw new Error(
-      'No cached account for the sender mailbox. Re-run the /auth/microsoft/mail-setup flow.'
+      'No Microsoft account is connected. Sign in with Microsoft (Connect) first.'
     );
   }
 
-  const result = await mailClient.acquireTokenSilent({
-    account,
-    scopes: MAIL_SCOPES,
-  });
+  const msalAccount = await msalClient
+    .getTokenCache()
+    .getAccountByHomeId(account.homeAccountId);
+  if (!msalAccount) {
+    throw new Error(
+      'The connected account is missing from the token cache. Please reconnect.'
+    );
+  }
 
+  const result = await msalClient.acquireTokenSilent({
+    account: msalAccount,
+    scopes: ['Mail.Send'],
+  });
   if (!result?.accessToken) {
-    throw new Error('Failed to acquire a Graph access token for the sender mailbox.');
+    throw new Error('Failed to acquire a Graph access token for the connected account.');
   }
   return result.accessToken;
 }
