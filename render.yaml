@@ -1,0 +1,61 @@
+# Render Blueprint for the backend (Web Service).
+# Frontend is deployed separately on Vercel.
+#
+# To use: Render Dashboard -> New -> Blueprint -> pick this repo.
+# Then fill in the env vars marked "sync: false" in the dashboard.
+#
+# NOTE: the `disk` below keeps the Outlook token cache across restarts/redeploys.
+# Disks require a paid instance type (not Free). On Free, remove the `disk:` block
+# and re-run /auth/microsoft/mail-setup after each deploy instead.
+services:
+  - type: web
+    name: email-automation-backend
+    runtime: node
+    rootDir: backend
+    plan: starter # Free has no disk + sleeps after inactivity; Starter recommended
+    buildCommand: npm install && npm run build
+    startCommand: node dist/index.js
+    healthCheckPath: /health
+    autoDeploy: true
+    disk:
+      name: mail-token-cache
+      mountPath: /var/data
+      sizeGB: 1
+    envVars:
+      - key: NODE_VERSION
+        value: "22"
+      - key: NODE_ENV
+        value: production
+      # URLs (BACKEND_URL is this service's public URL; set after first deploy)
+      - key: BACKEND_URL
+        sync: false
+      - key: FRONTEND_URL
+        sync: false
+      # Microsoft
+      - key: MS_CLIENT_ID
+        sync: false
+      - key: MS_CLIENT_SECRET
+        sync: false
+      - key: MS_TENANT
+        value: common
+      - key: MS_LOGIN_REDIRECT_URI
+        sync: false
+      - key: MS_MAIL_REDIRECT_URI
+        sync: false
+      - key: MAIL_SENDER
+        sync: false
+      # Persist the token cache on the mounted disk so email keeps working
+      - key: MS_TOKEN_CACHE_PATH
+        value: /var/data/.mail-token-cache.json
+      - key: MS_MAIL_ACCOUNT_PATH
+        value: /var/data/.mail-account.json
+      # Google Sheets (service account as base64 -> no file to commit)
+      - key: GOOGLE_SHEET_ID
+        sync: false
+      - key: GOOGLE_SHEET_NAME
+        value: Sheet1
+      - key: SERVICE_ACCOUNT_KEY_BASE64
+        sync: false
+      # Apps Script shared secret
+      - key: API_KEY
+        sync: false
