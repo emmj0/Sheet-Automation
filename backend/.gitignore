@@ -1,0 +1,21 @@
+node_modules/
+dist/
+logs/
+*.log
+backend/service-account.json.json
+backend/service-account.json
+.env
+*.env
+.mail-token-cache.json
+.mail-account.json
+# Secrets - NEVER commit these
+.env
+.env.*
+!.env.example
+service-account.json
+*.pem
+*.key
+
+# Microsoft mail token cache (contains refresh tokens)
+.mail-token-cache.json
+.mail-account.json

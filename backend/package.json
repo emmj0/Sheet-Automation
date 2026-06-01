@@ -1,0 +1,40 @@
+{
+  "name": "email-automation-backend",
+  "version": "1.0.0",
+  "description": "Microsoft OAuth + Google Sheets + Outlook (Microsoft Graph) email automation backend",
+  "main": "dist/index.js",
+  "type": "commonjs",
+  "scripts": {
+    "dev": "ts-node-dev --respawn --transpile-only src/index.ts",
+    "build": "tsc -p tsconfig.json",
+    "start": "node dist/index.js",
+    "typecheck": "tsc --noEmit"
+  },
+  "keywords": [
+    "microsoft-oauth",
+    "azure-ad",
+    "msal",
+    "microsoft-graph",
+    "outlook",
+    "google-sheets",
+    "express",
+    "typescript"
+  ],
+  "author": "",
+  "license": "MIT",
+  "dependencies": {
+    "@azure/msal-node": "^2.16.2",
+    "cors": "^2.8.5",
+    "dotenv": "^16.4.5",
+    "express": "^4.19.2",
+    "googleapis": "^144.0.0",
+    "winston": "^3.13.1"
+  },
+  "devDependencies": {
+    "@types/cors": "^2.8.17",
+    "@types/express": "^4.17.21",
+    "@types/node": "^22.5.0",
+    "ts-node-dev": "^2.0.0",
+    "typescript": "^5.5.4"
+  }
+}
