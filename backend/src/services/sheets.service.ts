@@ -97,24 +97,45 @@ export async function findUserByEmail(email: string): Promise<SheetRow | null> {
 
 /* ── Writes ───────────────────────────────────────────────────────────── */
 
-/** Append a raw [A, B, C] row to the bottom of the sheet. */
+/**
+ * Write [A, B, C] to the first row after the last real email.
+ *
+ * We deliberately do NOT use spreadsheets.values.append here: when column A
+ * has the checkbox data-validation applied to many empty rows, every one of
+ * those cells holds a FALSE value, so append() thinks the table spans
+ * hundreds of rows and drops the new entry far down (e.g. row 1001). Instead
+ * we find the last non-empty cell in column B (Email) and write right after it.
+ */
 export async function appendRow(
   sendEmail: boolean,
   email: string,
   status: EmailStatus
 ): Promise<number> {
-  const res = await getClient().spreadsheets.values.append({
+  const res = await getClient().spreadsheets.values.get({
     spreadsheetId: env.sheets.spreadsheetId,
-    range: range(COLUMN_RANGE),
+    range: range('B:B'),
+    valueRenderOption: 'UNFORMATTED_VALUE',
+  });
+
+  const emails = res.data.values ?? [];
+  let lastDataRow = HEADER_ROW; // row 1 is the header
+  for (let i = HEADER_ROW; i < emails.length; i++) {
+    const cell = emails[i]?.[0];
+    if (cell !== undefined && cell !== null && String(cell).trim() !== '') {
+      lastDataRow = i + 1; // 1-based sheet row
+    }
+  }
+
+  const targetRow = Math.max(lastDataRow + 1, HEADER_ROW + 1);
+
+  await getClient().spreadsheets.values.update({
+    spreadsheetId: env.sheets.spreadsheetId,
+    range: range(`A${targetRow}:C${targetRow}`),
     valueInputOption: 'USER_ENTERED',
-    insertDataOption: 'INSERT_ROWS',
     requestBody: { values: [[sendEmail, email, status]] },
   });
 
-  // updatedRange looks like "Sheet1!A7:C7" — pull the row number out.
-  const updatedRange = res.data.updates?.updatedRange ?? '';
-  const match = updatedRange.match(/![A-Z]+(\d+):/);
-  return match ? parseInt(match[1], 10) : -1;
+  return targetRow;
 }
 
 /** Update only the Status (column C) of a given row. */
