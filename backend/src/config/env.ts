@@ -85,6 +85,13 @@ export const env = {
   },
 
   apiKey: required('API_KEY'),
+
+  mail: {
+    /** Email subject. A specific line scores better with spam filters than "Welcome". */
+    subject: optional('MAIL_SUBJECT', 'Your registration is confirmed'),
+    /** Friendly product name used in the email body. */
+    appName: optional('MAIL_APP_NAME', 'Email Automation'),
+  },
 };
 
 export type Env = typeof env;

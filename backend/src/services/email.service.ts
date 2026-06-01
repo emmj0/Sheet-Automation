@@ -42,16 +42,22 @@ export async function verifyEmailReady(): Promise<boolean> {
   }
 }
 
-const SUBJECT = 'Welcome';
+// A specific, non-generic subject scores better than a bare "Welcome".
+const SUBJECT = env.mail.subject;
 
-function buildHtml(): string {
+function buildHtml(recipient: string): string {
   return `
-  <div style="font-family:Arial,Helvetica,sans-serif;max-width:560px;margin:auto;color:#1f2937">
-    <h2 style="color:#0067b8">Welcome 🎉</h2>
+  <div style="font-family:Arial,Helvetica,sans-serif;max-width:560px;margin:auto;color:#1f2937;line-height:1.6">
+    <h2 style="color:#0067b8;margin:0 0 16px">Welcome to ${env.mail.appName}</h2>
     <p>Hello,</p>
-    <p>Thank you for registering through Microsoft Sign-In.</p>
-    <p>This email was automatically sent from our Email Automation System.</p>
-    <p style="margin-top:32px">Regards,<br/>Support Team</p>
+    <p>Your registration with <strong>${recipient}</strong> is confirmed. Thank you for signing in with your Microsoft account.</p>
+    <p>If you have any questions, just reply to this email and we'll help you out.</p>
+    <p style="margin-top:28px">Best regards,<br/>The ${env.mail.appName} Team</p>
+    <hr style="border:none;border-top:1px solid #e5e7eb;margin:28px 0 12px" />
+    <p style="font-size:12px;color:#6b7280;margin:0">
+      You're receiving this email because you signed in with your Microsoft
+      account at ${env.mail.appName}. If this wasn't you, you can safely ignore it.
+    </p>
   </div>`;
 }
 
@@ -68,7 +74,7 @@ export async function sendEmail(
   const payload = {
     message: {
       subject: SUBJECT,
-      body: { contentType: 'HTML', content: buildHtml() },
+      body: { contentType: 'HTML', content: buildHtml(email) },
       toRecipients: [{ emailAddress: { address: email } }],
     },
     saveToSentItems: true,
